@@ -7,6 +7,7 @@
 #include <PWM.h>
 #include <LiquidCrystal_I2C.h>
 #include <Queue.h>
+#include <PID.h>
 #include <math.h>
 #include <stdio.h>
 
@@ -28,13 +29,17 @@ typedef unsigned char uchr;
 #define UpPin       3
 #define DownPin     4
 
-#define PWM1 9
-#define PWM2 10
+#define PWM1		9
+#define PWM2		10
+#define PWM_RES		65536L
+#define PWM_FREQ	10000L
 
 #define MaxSampleVol 5.0
 #define MaxBatVol   25
 #define MaxPwrVol   35
 #define MaxCurrent  2.5
+#define BatVolTh	24
+
 const double CurrentGain = MaxCurrent / (MaxSampleVol / 5.0 * 1023);
 const double BatVolGain = MaxBatVol / (MaxSampleVol / 5.0 * 1023);
 const double PwrVolGain = MaxPwrVol / (MaxSampleVol / 5.0 * 1023);
@@ -61,17 +66,22 @@ void outputMode();
 void autoMode();
 // 目标电流，当前电流，电池电压
 void print2LCD(double target, double cur, double vol);
+bool keyPressed(uchr pin, uchr val = LOW);
+template <typename T>
 
 void setup()
 {
 	pinMode(BatVolPin, INPUT);
 	pinMode(PwrVolPin, INPUT);
 	pinMode(CurrentPin, INPUT);
-	pinMode(ModePin, INPUT_PULLUP);
-	pinMode(UpPin, INPUT_PULLUP);
-	pinMode(DownPin, INPUT_PULLUP);
+	pinMode(ModePin, INPUT);
+	pinMode(UpPin, INPUT);
+	pinMode(DownPin, INPUT);
 
 	attachInterrupt(ModePin, changeMode, LOW);
+	InitTimersSafe();
+	SetPinFrequency(PWM1, PWM_FREQ);
+	SetPinFrequency(PWM2, PWM_FREQ);
 
 	Lcd.init();
 	Lcd.backlight();//开启背光
@@ -81,6 +91,7 @@ void setup()
 
 void loop()
 {
+	// 切换模式
 	switch (mode)
 	{
 	case Input:
@@ -99,6 +110,7 @@ void loop()
 	}
 }
 
+// 获取均方根测量值，取SampleCnt次测量
 double getRMS(uchr pin, double gain)
 {
 	double s = 0, t;
@@ -110,6 +122,7 @@ double getRMS(uchr pin, double gain)
 	return sqrt(s / SampleCnt);
 }
 
+// 中断服务函数，改变模式
 void changeMode()
 {
 	uint t = micros();
@@ -138,6 +151,7 @@ void changeMode()
 	}
 }
 
+// 输出至1602,
 void print2LCD(double target, double cur, double vol)
 {
 	sprintf(lcdStr, " %.3fA  %.3fA", target, cur);
@@ -148,3 +162,63 @@ void print2LCD(double target, double cur, double vol)
 	Lcd.print(lcdStr);
 }
 
+bool keyPressed(uchr pin, uchr val)
+{
+	if (digitalRead(pin) == val)
+	{
+		delay(10);
+		if (digitalRead(pin) == val)
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+// 充电模式
+void inputMode()
+{
+	PID pid(100, 1, 1, 2, -2, PWM_RES);
+	long pos = 0,det;
+	double current = 0.0, target = 1.0,batVol;
+	while (mode == Input)
+	{
+		// 检查按键
+		if (keyPressed(UpPin))
+		{
+			target += 0.05;
+		}
+		if (keyPressed(DownPin))
+		{
+			target -= 0.05;
+		}
+		target = constrain(target, 1.0, 2.0);
+		// 检查电池电压上限
+		batVol = analogRead(BatVolPin) * BatVolGain;
+		if (batVol > BatVolTh)
+		{
+			// 关闭输入
+			pos = 0;
+			current = 0.0;
+		}
+		else
+		{
+			current = getRMS(CurrentPin, CurrentGain);
+			det = pid.update(target - current, current);
+			// 输出限幅
+			pos = constrain(det + pos, 0, PWM_RES);
+			pwmWriteHR(PWM1, pos);
+		}
+		print2LCD(target, current, batVol);
+	}
+}
+
+void outputMode()
+{
+
+}
+
+void autoMode()
+{
+
+}
