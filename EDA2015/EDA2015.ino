@@ -1,7 +1,7 @@
 /*
- Name:		EDA2015.ino
- Created:	2017/5/9 12:23:55
- Author:	zaxs0130
+Name:		EDA2015.ino
+Created:	2017/5/9 12:23:55
+Author:	zaxs0130
 */
 
 #include <PWM.h>
@@ -39,23 +39,27 @@ typedef unsigned char uchr;
 #define MaxPwrVol   35
 #define MaxCurrent  2.5
 #define BatVolTh	24
+#define LoadVol		30
 
 const double CurrentGain = MaxCurrent / (MaxSampleVol / 5.0 * 1023);
 const double BatVolGain = MaxBatVol / (MaxSampleVol / 5.0 * 1023);
 const double PwrVolGain = MaxPwrVol / (MaxSampleVol / 5.0 * 1023);
 
 //LCD1602
-LiquidCrystal_I2C Lcd(0x27, 16, 2);
-char lcdStr[17];
+LiquidCrystal_I2C Lcd(0x3f, 16, 2);
+
+String lcdStr;
 enum { Input = 0, Output = 1, Auto = 2 } mode;
-const char modeStr[3][8] = { " Input", "OUTPUT"," Auto " };
+const char modeStr[3][8] = { "CHARGE", "OUTPUT"," AUTO " };
+
+PID inputPid(100, 1, 1, 2, -2, PWM_RES), outputPid(100, 1, 1, 2, -2, PWM_RES);
 
 /*
 显示屏样式：
 0123456789012345
 ******************
 * 1.024A  1.024A *0x80
-* OUTPUT  18.75V *0xC0
+* CHARGE  18.75V *0xC0
 ******************
 */
 
@@ -66,8 +70,7 @@ void outputMode();
 void autoMode();
 // 目标电流，当前电流，电池电压
 void print2LCD(double target, double cur, double vol);
-bool keyPressed(uchr pin, uchr val = LOW);
-template <typename T>
+bool keyPressed(uchr pin, uchr val);
 
 void setup()
 {
@@ -87,6 +90,8 @@ void setup()
 	Lcd.backlight();//开启背光
 	Lcd.noBlink();//无光标
 	Lcd.setCursor(0, 0);
+
+	Serial.begin(9600);
 }
 
 void loop()
@@ -154,15 +159,17 @@ void changeMode()
 // 输出至1602,
 void print2LCD(double target, double cur, double vol)
 {
-	sprintf(lcdStr, " %.3fA  %.3fA", target, cur);
+	lcdStr = String(" ") + String(target, 3) + "A  " + String(cur, 3) + "A";
 	Lcd.setCursor(0, 0);
 	Lcd.print(lcdStr);
-	sprintf(lcdStr, " %s  %.2f", modeStr[mode], vol);
+	Serial.println(lcdStr);
+	lcdStr = String(" ") + modeStr[mode] + "  " + String(vol, 2) + "V ";
 	Lcd.setCursor(0, 1);
 	Lcd.print(lcdStr);
+	Serial.println(lcdStr);
 }
 
-bool keyPressed(uchr pin, uchr val)
+bool keyPressed(uchr pin, uchr val = LOW)
 {
 	if (digitalRead(pin) == val)
 	{
@@ -178,9 +185,10 @@ bool keyPressed(uchr pin, uchr val)
 // 充电模式
 void inputMode()
 {
-	PID pid(100, 1, 1, 2, -2, PWM_RES);
-	long pos = 0,det;
-	double current = 0.0, target = 1.0,batVol;
+	long pos = 0, det;
+	double current = 0.0, target = 1.0, batVol;
+
+	inputPid.resetIntState();
 	while (mode == Input)
 	{
 		// 检查按键
@@ -204,7 +212,7 @@ void inputMode()
 		else
 		{
 			current = getRMS(CurrentPin, CurrentGain);
-			det = pid.update(target - current, current);
+			det = inputPid.update(target - current, current);
 			// 输出限幅
 			pos = constrain(det + pos, 0, PWM_RES);
 			pwmWriteHR(PWM1, pos);
@@ -215,10 +223,43 @@ void inputMode()
 
 void outputMode()
 {
+	long pos = 0, det;
+	double  target = LoadVol, pwrVol, current;
 
+	outputPid.resetIntState();
+	while (mode == Output)
+	{
+		pwrVol = getRMS(PwrVolPin, PwrVolGain);
+		current = getRMS(CurrentPin, CurrentGain);
+		det = outputPid.update(target - pwrVol, pwrVol);
+		// 输出限幅
+		pos = constrain(det + pos, 0, PWM_RES);
+		pwmWriteHR(PWM2, pos);
+		print2LCD(current, current, pwrVol);
+	}
 }
 
 void autoMode()
 {
+	double targetVol = LoadVol, pwrVol, inputCurrent,loadCurrent;
 
+	inputPid.resetIntState();
+	outputPid.resetIntState();
+
+	while (mode == Auto)
+	{
+		pwrVol = getRMS(PwrVolPin, PwrVolGain);
+		inputCurrent = getRMS(CurrentPin, CurrentGain);
+		if (abs(pwrVol - targetVol) > 0.3) // 不符合要求才调整
+		{
+			if (pwrVol > targetVol)
+			{
+
+			}
+			else
+			{
+
+			}
+		}
+	}
 }
